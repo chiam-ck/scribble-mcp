@@ -25,6 +25,7 @@ from scribble_mcp.server import (
     _vault_search,
     _vault_create,
     _vault_append,
+    _vault_delete,
     VAULT_ROOT,
 )
 
@@ -125,6 +126,26 @@ async def handle_append(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
+async def handle_delete(request: Request) -> JSONResponse:
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+
+    path_glob = body.get("path")
+    if not path_glob:
+        return JSONResponse({"ok": False, "error": "Missing required field: path"}, status_code=400)
+
+    try:
+        result = await _vault_delete(path_glob)
+        if "error" in result:
+            return JSONResponse({"ok": False, "error": result["error"]}, status_code=400)
+        return JSONResponse({"ok": True, **result})
+    except Exception as e:
+        _LOG.exception("delete failed")
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 async def handle_health(_request: Request) -> PlainTextResponse:
     """Health check — also reports vault stats."""
     try:
@@ -195,6 +216,11 @@ async def handle_legacy_post(request: Request) -> JSONResponse:
             return JSONResponse({"success": True, "path": fp, "write_ok": True, "git": git_out})
         except Exception as e:
             return JSONResponse({"success": True, "path": fp, "write_ok": True, "git_error": str(e)})
+    elif op == "delete":
+        result = await _vault_delete(entry.get("path", ""))
+        if "error" in result:
+            return JSONResponse({"success": False, "error": result["error"]})
+        return JSONResponse({"success": True, **result})
 
     return JSONResponse({"success": False, "error": f"Unknown operation: {op}"}, status_code=400)
 
@@ -226,6 +252,7 @@ routes = [
     Route("/search", endpoint=handle_search),
     Route("/create", endpoint=handle_create, methods=["POST"]),
     Route("/append", endpoint=handle_append, methods=["POST"]),
+    Route("/delete", endpoint=handle_delete, methods=["POST"]),
     Route("/", endpoint=handle_legacy_post, methods=["POST"]),
 ]
 

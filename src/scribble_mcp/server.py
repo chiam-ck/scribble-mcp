@@ -247,6 +247,22 @@ async def _vault_append(path_glob: str, content: str, section: str | None = None
     }
 
 
+async def _vault_delete(path_glob: str) -> dict:
+    """Delete a note by path glob. Must match exactly one file."""
+    matches = list(VAULT_ROOT.glob(path_glob))
+    if not matches:
+        return {"error": f"No notes matching '{path_glob}'"}
+    if len(matches) > 1:
+        paths = [str(m.relative_to(VAULT_ROOT)) for m in sorted(matches)]
+        return {"error": f"Pattern matches multiple files", "matches": paths}
+
+    filepath = matches[0]
+    rel = str(filepath.relative_to(VAULT_ROOT))
+    filepath.unlink()
+    _git_commit_and_push(f"scribble: delete {filepath.name}")
+    return {"path": rel, "status": "deleted"}
+
+
 # ── MCP server wiring ─────────────────────────────────────────────
 
 def _build_server() -> Server:
@@ -355,6 +371,20 @@ def _build_server() -> Server:
                     "required": ["path_glob", "content"],
                 },
             ),
+            Tool(
+                name="vault_delete",
+                description="Delete a note by path glob. Must match exactly one file. Commits and pushes the deletion to git.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "path_glob": {
+                            "type": "string",
+                            "description": "Glob pattern to match the target note (must match exactly one file)",
+                        },
+                    },
+                    "required": ["path_glob"],
+                },
+            ),
         ]
 
     @server.call_tool()
@@ -383,6 +413,8 @@ def _build_server() -> Server:
                     arguments["content"],
                     arguments.get("section"),
                 )
+            elif name == "vault_delete":
+                result = await _vault_delete(arguments["path_glob"])
             else:
                 result = {"error": f"Unknown tool: {name}"}
 
