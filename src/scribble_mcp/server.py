@@ -259,8 +259,8 @@ async def _vault_delete(path_glob: str) -> dict:
     filepath = matches[0]
     rel = str(filepath.relative_to(VAULT_ROOT))
     filepath.unlink()
-    _git_commit_and_push(f"scribble: delete {filepath.name}")
-    return {"path": rel, "status": "deleted"}
+    git = _git_commit_and_push(f"scribble: delete {filepath.name}")
+    return {"path": rel, "status": "deleted", "git": git.get("output", "")}
 
 
 # ── MCP server wiring ─────────────────────────────────────────────

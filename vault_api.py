@@ -185,7 +185,19 @@ async def handle_legacy_post(request: Request) -> JSONResponse:
     if op == "list":
         target = entry.get("directory", "")
         if target:
-            notes = await _vault_list(target.rstrip("s"))  # "concepts" -> "concept"
+            # Map directory names to note types (accept both plural and singular)
+            dir_to_type = {
+                "concepts": "concept", "concept": "concept",
+                "entities": "entity", "entity": "entity",
+                "comparisons": "comparison", "comparison": "comparison",
+                "queries": "query", "query": "query",
+                "raw": "raw",
+            }
+            note_type = dir_to_type.get(target)
+            if note_type:
+                notes = await _vault_list(note_type)
+            else:
+                return JSONResponse({"success": False, "error": f"Unknown directory '{target}'. Valid: concepts, entities, comparisons, queries, raw"})
         else:
             notes = await _vault_list(None)
         return JSONResponse({"success": True, "entries": notes, "count": len(notes)})
