@@ -1,0 +1,1 @@
+# vault_mcp — MCP server for Ck's LLM Wiki Vault

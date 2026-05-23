@@ -1,0 +1,5 @@
+# Vault Wiki MCP
+.env
+.venv/
+__pycache__/
+*.pyc
