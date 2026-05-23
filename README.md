@@ -1,6 +1,6 @@
 # Scribble MCP 📝
 
-A lightweight MCP server for reading, searching, and writing to a markdown wiki vault. Designed for LLM agents that need persistent knowledge storage.
+A lightweight MCP server for reading, searching, and writing to a markdown LLM wiki vault. Designed for LLM agents that need persistent knowledge storage.
 
 https://github.com/samurai-bot/scribble-mcp
 
