@@ -83,20 +83,21 @@ def _update_frontmatter_date(content: str, field: str, value: str) -> str:
     return content
 
 
-def _git_commit(message: str) -> tuple[str, str]:
-    """Run git commit in the vault repo. Returns (stdout, stderr)."""
+def _git_commit_and_push(message: str) -> dict:
+    """Git add, commit, and push. Returns {'ok': True, 'output': '...'} or {'ok': False, 'error': '...'}."""
     try:
-        result = subprocess.run(
-            ["git", "commit", "-m", message],
-            cwd=VAULT_ROOT.parent,
-            capture_output=True, text=True,
-            timeout=30,
-        )
-        return result.stdout, result.stderr
+        subprocess.run(["git", "add", "-A"], cwd=VAULT_ROOT.parent, capture_output=True, text=True, timeout=30)
+        commit = subprocess.run(["git", "commit", "-m", message], cwd=VAULT_ROOT.parent, capture_output=True, text=True, timeout=30)
+        push = subprocess.run(["git", "push"], cwd=VAULT_ROOT.parent, capture_output=True, text=True, timeout=30)
+        out = (commit.stdout or commit.stderr or "").strip()
+        push_out = (push.stdout or push.stderr or "").strip()
+        return {"ok": True, "output": out, "push": push_out}
     except subprocess.TimeoutExpired:
-        return "", "git commit timed out"
+        return {"ok": False, "error": "timed out"}
     except FileNotFoundError:
-        return "", "git not found"
+        return {"ok": False, "error": "git not found"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 # ── Tool implementations ──────────────────────────────────────────
@@ -195,6 +196,7 @@ async def _vault_create(
 
     filepath.parent.mkdir(parents=True, exist_ok=True)
     _write_file(filepath, full_content)
+    _git_commit_and_push(f"scribble: create {filename}")
 
     return {
         "path": str(filepath.relative_to(VAULT_ROOT)),
@@ -237,6 +239,7 @@ async def _vault_append(path_glob: str, content: str, section: str | None = None
 
     new_content = f"---{new_fm}---\n{new_body}\n"
     _write_file(filepath, new_content)
+    _git_commit_and_push(f"scribble: append to {filepath.name}")
 
     return {
         "path": str(filepath.relative_to(VAULT_ROOT)),

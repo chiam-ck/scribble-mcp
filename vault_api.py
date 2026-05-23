@@ -181,10 +181,20 @@ async def handle_legacy_post(request: Request) -> JSONResponse:
     elif op == "write":
         fp = entry.get("path", "")
         content = entry.get("content", "")
+        msg = entry.get("commit_message", "scribble: update via MCP")
         filepath = VAULT_ROOT / fp
         filepath.parent.mkdir(parents=True, exist_ok=True)
         filepath.write_text(content, encoding="utf-8")
-        return JSONResponse({"success": True, "path": fp, "write_ok": True})
+        # git commit + push
+        import subprocess
+        try:
+            subprocess.run(["git", "add", "-A"], cwd=VAULT_ROOT.parent, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(["git", "commit", "-m", msg], cwd=VAULT_ROOT.parent, capture_output=True, text=True, timeout=30)
+            push = subprocess.run(["git", "push"], cwd=VAULT_ROOT.parent, capture_output=True, text=True, timeout=30)
+            git_out = result.stdout.strip() if result.stdout else (result.stderr.strip() if result.stderr else "")
+            return JSONResponse({"success": True, "path": fp, "write_ok": True, "git": git_out})
+        except Exception as e:
+            return JSONResponse({"success": True, "path": fp, "write_ok": True, "git_error": str(e)})
 
     return JSONResponse({"success": False, "error": f"Unknown operation: {op}"}, status_code=400)
 
