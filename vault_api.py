@@ -250,6 +250,7 @@ async def handle_index(_request: Request) -> JSONResponse:
             "GET  /search": "Search notes (?q=query&max=20)",
             "POST /create": "Create note (JSON body)",
             "POST /append": "Append to note (JSON body)",
+            "POST /delete": "Delete note (JSON body: {\"path\": \"...\"})",
         },
     })
 
