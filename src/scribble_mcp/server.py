@@ -62,7 +62,7 @@ def _frontmatter(title: str, note_type: str, tags: list[str], sources: list[str]
         f"updated: {_today()}\n"
         f"type: {note_type}\n"
         f"tags: [{', '.join(tags)}]\n"
-        f"sources: [{', '.join(f'raw/{s}' for s in sources)}]\n"
+        f"sources: [{', '.join(sources)}]\n"
         "---\n"
     )
 
@@ -185,8 +185,13 @@ async def _vault_create(
     subdir = TYPE_DIRS[note_type]
     slug = _slugify(title)
     today = _today()
-    filename = f"{today}-{slug}.md"
-    filepath = VAULT_ROOT / subdir / filename
+    filename = f"{slug}.md"
+    # Year subdir for concepts and raw; entities/comparisons/queries stay flat
+    if note_type in ("concept", "query"):
+        year = today.split("-")[0]
+        filepath = VAULT_ROOT / subdir / year / filename
+    else:
+        filepath = VAULT_ROOT / subdir / filename
 
     if filepath.exists():
         return {"error": f"Note already exists: {filepath.relative_to(VAULT_ROOT)}"}
