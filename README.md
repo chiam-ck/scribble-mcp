@@ -2,7 +2,7 @@
 
 A lightweight MCP server for reading, searching, and writing to a markdown LLM wiki vault. Designed for LLM agents that need persistent knowledge storage.
 
-https://github.com/samurai-bot/scribble-mcp
+https://github.com/chiam-ck/scribble-mcp
 
 ## Features
 
@@ -18,7 +18,7 @@ https://github.com/samurai-bot/scribble-mcp
 
 ```bash
 # Install
-git clone https://github.com/samurai-bot/scribble-mcp.git
+git clone https://github.com/chiam-ck/scribble-mcp.git
 cd scribble-mcp
 uv venv && source .venv/bin/activate && uv pip install -e .
 
