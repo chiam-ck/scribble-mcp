@@ -1,7 +1,7 @@
 [project]
 name = "scribble-mcp"
-version = "1.0.0"
-description = "Direct HTTP API for the Ubuntu-mounted iCloud Obsidian vault"
+version = "1.1.0"
+description = "Direct HTTP API for iCloud-backed Obsidian vaults on Linux and macOS"
 requires-python = ">=3.11"
 dependencies = []
 
