@@ -1,50 +1,90 @@
 # Scribble MCP Vault API
 
-The repository name is historical. The implementation is current: a small, dependency-free HTTP API used by Claude's n8n MCP vault workflows.
+The repository name is historical. The implementation is a small,
+dependency-free HTTP API used by Claude's n8n MCP vault workflows.
+
+The repository keeps separate deployment entry points for the original Ubuntu
+host and the Mac mini. The Ubuntu implementation is intentionally preserved.
 
 ## Production architecture
 
 ```text
 Claude MCP
-  → n8n on tech-vm
-  → HTTP over private Tailscale
-  → vault-api.service on agentic-vm
-  → /home/ck/icloud-linux-mount/Obsidian/Ck's Vault
-  → iCloud
+  → n8n over private Tailscale
+  → vault-api on the selected host
+  → Obsidian vault
 ```
 
-The Mac mini and SSH are not part of the vault path.
+## Ubuntu/Linux deployment (preserved)
 
-## Production service
-
-The user service runs `vault_api.py` from this repository:
+The original Linux implementation remains in:
 
 ```text
-/home/ck/repo/scribble-mcp/vault_api.py
-/home/ck/.config/systemd/user/vault-api.service
+vault_api.py
+deploy/vault-api.service
 ```
 
-It binds to `100.78.128.119:8765` in production. The API checks that both the mount and `icloud.service` are active before every vault operation. If either check fails, it returns an error and does not write.
+It expects the FUSE-mounted vault at:
 
-Start or inspect it on `agentic-vm`:
+```text
+/home/ck/icloud-linux-mount/Obsidian/Ck's Vault
+```
+
+The service checks the mount and `icloud.service` before vault operations.
+Run it with the existing systemd unit:
 
 ```bash
 systemctl --user daemon-reload
 systemctl --user enable --now vault-api.service
 systemctl --user status vault-api.service
-curl http://100.78.128.119:8765/health
-```
-
-For a local development process, the defaults bind to loopback:
-
-```bash
-python3 vault_api.py
-```
-
-To bind explicitly:
-
-```bash
 python3 vault_api.py 100.78.128.119 8765
+```
+
+The former Ubuntu endpoint was `100.78.128.119:8765`. That host is retired,
+but its code and deployment definition are retained here for portability and
+history.
+
+## macOS deployment
+
+The Mac-specific implementation is separate:
+
+```text
+vault_api_macos.py
+deploy/com.ck.scribble-mcp.vault-api.plist
+deploy/install-macos.command
+```
+
+The live Mac mini checkout and LaunchAgent are:
+
+```text
+/Users/ck/homelab/scribble-mcp
+/Users/ck/Library/LaunchAgents/com.ck.scribble-mcp.vault-api.plist
+```
+
+The service uses the native iCloud File Provider vault:
+
+```text
+/Users/ck/Library/Mobile Documents/iCloud~md~obsidian/Documents/Ck's Vault
+```
+
+It binds to the Mac mini's Tailscale address:
+
+```text
+100.90.117.53:8765
+```
+
+`launchd` starts it at login and keeps it alive after a process failure.
+Install or reload it outside the Hermes gateway with:
+
+```bash
+./deploy/install-macos.command
+```
+
+Inspect it with:
+
+```bash
+launchctl print gui/$(id -u)/com.ck.scribble-mcp.vault-api
+curl http://100.90.117.53:8765/health
 ```
 
 ## API contract
@@ -53,7 +93,7 @@ All paths are relative to the vault root. Path traversal and absolute paths are 
 
 | Method | Endpoint | Request | Purpose |
 |---|---|---|---|
-| GET | `/health` | none | Check mount and service health |
+| GET | `/health` | none | Check vault health |
 | GET | `/vault/read?path=wiki/SCHEMA.md` | none | Read a file |
 | GET | `/vault/list?path=wiki/` | none | List a directory |
 | GET | `/vault/search?q=frontmatter&path=wiki/` | none | Case-sensitive regex search |
@@ -71,26 +111,14 @@ The n8n MCP workflow parameter names are part of the contract:
 
 ## Write safety
 
-- The mount and `icloud.service` are checked before every operation.
-- Writes use direct file operations through the FUSE mount.
+- The vault root and `wiki/` directory are checked before operations.
+- Relative paths are required and path traversal is rejected.
+- Writes use direct file operations.
 - Existing files are not replaced through a generic temp-file-plus-rename workflow.
-- After writes, inspect the iCloud journal for `file-sync-complete`:
-
-```bash
-journalctl --user -u icloud.service -n 80 --no-pager
-```
-
-Do not add an SSH fallback or a second vault copy.
 
 ## n8n verification
 
-From `tech-vm`:
-
-```bash
-docker exec n8n node -e 'fetch("http://100.78.128.119:8765/health").then(async r => console.log(r.status, await r.text()))'
-```
-
-The seven live workflows are:
+The seven live Vault workflows are:
 
 - `Vault Read - MCP`
 - `Vault Write - MCP`
@@ -100,4 +128,6 @@ The seven live workflows are:
 - `Vault List - MCP`
 - `Vault Search - MCP`
 
-For an end-to-end check, use a temporary file under `wiki/`, exercise write, read, append, move, and delete, then confirm the file is gone. Also exercise list and search. Never leave test files in the vault.
+For an end-to-end check, use a temporary file under `wiki/`, exercise write,
+read, append, move, and delete, then confirm the file is gone. Also exercise
+list and search. Never leave test files in the vault.
