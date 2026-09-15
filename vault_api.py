@@ -12,10 +12,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
+from vault_mutations import MutationResult, MetadataError, VaultMutator
+
 VAULT = Path("/home/ck/icloud-linux-mount/Obsidian/Ck's Vault")
 MOUNT = Path("/home/ck/icloud-linux-mount")
 SERVICE = "icloud.service"
 MAX_BODY = 20 * 1024 * 1024
+MUTATOR = VaultMutator(VAULT, atomic=False)
 
 
 def service_ready() -> tuple[bool, str]:
@@ -61,15 +64,6 @@ def json_body(handler: BaseHTTPRequestHandler) -> dict:
     return data
 
 
-def write_text(path: Path, content: str, *, append: bool = False) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    mode = "a" if append else "w"
-    with path.open(mode, encoding="utf-8", newline="") as handle:
-        handle.write(content)
-        handle.flush()
-        os.fsync(handle.fileno())
-
-
 class Handler(BaseHTTPRequestHandler):
     server_version = "VaultAPI/1.0"
 
@@ -83,6 +77,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def error(self, code: int, message: str) -> None:
         self.reply(code, message + "\n", "text/plain; charset=utf-8")
+
+    def json_reply(self, code: int, payload: dict[str, object]) -> None:
+        self.reply(code, json.dumps(payload, ensure_ascii=False) + "\n", "application/json; charset=utf-8")
 
     def require_ready(self) -> None:
         ready, reason = service_ready()
@@ -148,12 +145,12 @@ class Handler(BaseHTTPRequestHandler):
             data = json_body(self)
             if parsed.path == "/vault/write":
                 path = safe_path(str(data["path"]))
-                write_text(path, str(data["content"]))
-                self.reply(200, "ok\n")
+                result = MUTATOR.write(relative(path), str(data["content"]))
+                self.json_reply(200, mutation_payload(result))
             elif parsed.path == "/vault/append":
                 path = safe_path(str(data["path"]))
-                write_text(path, str(data["content"]), append=True)
-                self.reply(200, "ok\n")
+                result = MUTATOR.append(relative(path), str(data["content"]))
+                self.json_reply(200, mutation_payload(result))
             elif parsed.path == "/vault/delete":
                 path = safe_path(str(data["path"]))
                 path.unlink()
@@ -168,7 +165,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, "ok\n")
             else:
                 self.error(404, "not found")
-        except (KeyError, ValueError, json.JSONDecodeError) as exc:
+        except (KeyError, ValueError, json.JSONDecodeError, MetadataError) as exc:
             self.error(400, str(exc))
         except (FileNotFoundError, NotADirectoryError) as exc:
             self.error(404, str(exc))
@@ -189,6 +186,18 @@ def main() -> None:
     host = sys.argv[1] if len(sys.argv) > 1 else os.environ.get("VAULT_API_HOST", "127.0.0.1")
     port = int(sys.argv[2]) if len(sys.argv) > 2 else int(os.environ.get("VAULT_API_PORT", "8765"))
     ThreadingHTTPServer((host, port), Handler).serve_forever()
+
+
+def mutation_payload(result: MutationResult) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "ok": True,
+        "path": result.path,
+        "operation": result.operation,
+        "metadata_updated": result.metadata_updated,
+    }
+    if result.updated is not None:
+        payload["updated"] = result.updated
+    return payload
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 # Scribble MCP Vault API
 
-The repository name is historical. The implementation is a small,
-dependency-free HTTP API used by Claude's n8n MCP vault workflows.
+The repository name is historical. The implementation is a small HTTP API
+used by Claude's n8n MCP vault workflows.
 
 The repository keeps separate deployment entry points for the original Ubuntu
 host and the Mac mini. The Ubuntu implementation is intentionally preserved.
@@ -113,8 +113,13 @@ The n8n MCP workflow parameter names are part of the contract:
 
 - The vault root and `wiki/` directory are checked before operations.
 - Relative paths are required and path traversal is rejected.
-- Writes use direct file operations.
-- Existing files are not replaced through a generic temp-file-plus-rename workflow.
+- Normal Markdown note mutations go through `vault_mutations.py`.
+- Appending or overwriting an existing frontmatter note bumps `updated:` to the API host's local date and preserves `created:` on overwrite.
+- New Markdown notes must contain valid schema frontmatter; missing or malformed metadata is rejected before writing.
+- `wiki/log.md`, `wiki/index.md`, `wiki/SCHEMA.md`, `wiki/raw/**`, non-Markdown files, and Markdown without frontmatter are metadata-exempt.
+- macOS mutations use a same-directory temporary file, `fsync`, and atomic replacement; a failed commit leaves the previous file intact.
+- Linux mutations use the same metadata and per-file locking layer, but commit in place because rename-based replacement is not reliable on the iCloud FUSE mount.
+- Successful write/append responses are JSON with `ok`, `path`, `operation`, and `metadata_updated` fields; enforced note mutations also include `updated`.
 
 ## n8n verification
 

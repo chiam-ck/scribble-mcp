@@ -1,9 +1,9 @@
 [project]
 name = "scribble-mcp"
-version = "1.1.0"
+version = "1.2.0"
 description = "Direct HTTP API for iCloud-backed Obsidian vaults on Linux and macOS"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["PyYAML>=6.0"]
 
 [project.scripts]
 vault-api = "vault_api:main"
