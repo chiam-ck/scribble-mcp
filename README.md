@@ -87,6 +87,42 @@ launchctl print gui/$(id -u)/com.ck.scribble-mcp.vault-api
 curl http://100.90.117.53:8765/health
 ```
 
+### iCloud cloud-only files
+
+macOS File Provider can evict a file's local contents while leaving its path
+visible. An ordinary read may then fail with `Resource deadlock avoided`
+(`EDEADLK`); that does not imply an n8n or application-thread deadlock.
+
+The Mac API now tries a normal read first, then uses a native
+`NSFileCoordinator` read for this specific error. This materializes the
+canonical iCloud file without modifying its contents or using a stale mirror.
+It covers read/search requests and the existing-content reads required before
+write/append. Other errors, including permission failures, are not treated as
+hydration failures.
+
+The helper is compiled by `deploy/install-macos.command` before the service is
+stopped. It requires Apple's Command Line Tools. To build it separately:
+
+```bash
+xcrun swiftc -O vault_coordinated_read.swift -o vault_coordinated_read
+```
+
+The compiled executable is local build output and is not tracked in Git.
+Hydration is bounded to 15 seconds; if it times out or fails, the API returns
+HTTP 503 with `Retry-After: 3`. A failed existing-content read prevents any
+write/append commit. Read requests may be retried; do not blindly replay
+append/write after an unknown outcome—read the exact target first.
+
+Finder's **Keep Downloaded** option on the vault folder is an additional
+eviction-prevention measure. It is not enabled by this release and does not
+replace the API's coordinated-read handling.
+
+Run the regression suite from the repository root:
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
 ## API contract
 
 All paths are relative to the vault root. Path traversal and absolute paths are rejected.

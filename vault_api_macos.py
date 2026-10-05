@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from vault_mutations import MutationResult, MetadataError, VaultMutator
+from vault_reads import read_vault_bytes, read_vault_text
 
 VAULT = Path(
     os.environ.get(
@@ -25,7 +26,7 @@ MOUNT = Path(
 ).expanduser()
 SERVICE = os.environ.get("VAULT_SYNC_SERVICE", "icloud.service")
 MAX_BODY = 20 * 1024 * 1024
-MUTATOR = VaultMutator(VAULT)
+MUTATOR = VaultMutator(VAULT, read_bytes=read_vault_bytes)
 
 
 def service_ready() -> tuple[bool, str]:
@@ -91,6 +92,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
+        if code == 503:
+            self.send_header("Retry-After", "3")
         self.end_headers()
         self.wfile.write(payload)
 
@@ -116,7 +119,7 @@ class Handler(BaseHTTPRequestHandler):
             self.require_ready()
             if parsed.path == "/vault/read":
                 path = safe_path(query.get("path", [""])[0])
-                self.reply(200, path.read_text(encoding="utf-8", errors="replace"))
+                self.reply(200, read_vault_text(path))
             elif parsed.path == "/vault/list":
                 path = safe_path(query.get("path", [""])[0], allow_empty=True)
                 if not path.is_dir():
@@ -138,7 +141,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not candidate.is_file() or candidate.name.startswith("."):
                         continue
                     try:
-                        text = candidate.read_text(encoding="utf-8", errors="replace")
+                        text = read_vault_text(candidate)
                     except OSError:
                         continue
                     if pattern.search(text):

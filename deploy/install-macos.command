@@ -1,5 +1,8 @@
 #!/bin/zsh
 set -euo pipefail
+REPO_ROOT="${0:A:h:h}"
+# Compile before stopping the service: build failures leave the old API running.
+xcrun swiftc -O "$REPO_ROOT/vault_coordinated_read.swift" -o "$REPO_ROOT/vault_coordinated_read"
 PLIST="/Users/ck/Library/LaunchAgents/com.ck.scribble-mcp.vault-api.plist"
 DOMAIN="gui/$(id -u)"
 LABEL="com.ck.scribble-mcp.vault-api"

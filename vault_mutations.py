@@ -81,17 +81,19 @@ class VaultMutator:
         today: Callable[[], date] = date.today,
         lock_dir: Path | None = None,
         atomic: bool = True,
+        read_bytes: Callable[[Path], bytes] = Path.read_bytes,
     ) -> None:
         self.vault_root = Path(vault_root).resolve()
         self.today = today
         self.lock_dir = Path(lock_dir or os.environ.get("VAULT_LOCK_DIR", os.path.join(tempfile.gettempdir(), "scribble-mcp-vault-locks"))).resolve()
         self.atomic = atomic
+        self.read_bytes = read_bytes
         self._thread_locks: dict[str, threading.Lock] = {}
 
     def append(self, relative_path: str, content: str) -> MutationResult:
         path = self._path(relative_path)
         with self._locked(path):
-            existing = path.read_bytes() if path.exists() else b""
+            existing = self.read_bytes(path) if path.exists() else b""
             exempt = self._is_exempt(relative_path)
             old_text = self._decode(existing, path) if existing and not exempt else ""
             if not path.exists():
@@ -126,7 +128,7 @@ class VaultMutator:
         path = self._path(relative_path)
         with self._locked(path):
             exists = path.exists()
-            existing = path.read_bytes() if exists else b""
+            existing = self.read_bytes(path) if exists else b""
             exempt = self._is_exempt(relative_path)
             old_text = self._decode(existing, path) if existing and not exempt else ""
 

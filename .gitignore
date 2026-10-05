@@ -3,3 +3,6 @@
 .venv/
 __pycache__/
 *.pyc
+
+# Native macOS helper is built locally from its tracked Swift source.
+/vault_coordinated_read
