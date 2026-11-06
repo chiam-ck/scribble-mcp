@@ -177,5 +177,5 @@ list and search. Never leave test files in the vault.
 
 `vault_api_client.py` is the auditable HTTP client for the API (`health`, `read`,
 `list`, `search`, `write`, `append`, `delete`, `move`, `batch`). Every mutation is
-read back before it reports success, and `delete` sends the digest of the content
-it just read, so a note edited in between is refused rather than clobbered.
+read back before it reports success, and `delete` and `move` both send the digest of the content
+they just read, so a note edited in between is refused rather than clobbered.

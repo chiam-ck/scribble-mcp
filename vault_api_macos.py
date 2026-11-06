@@ -40,15 +40,31 @@ DELETE_PROTECTED = {
 }
 
 
-def audit_delete(relative_path: str, digest: str, size: int) -> bool:
-    """Best-effort audit line; a failed log append never resurrects the file."""
+def audit_mutation(operation: str, relative_path: str, digest: str, size: int) -> bool:
+    """Best-effort audit line; a failed log append never undoes the mutation."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    line = f"{stamp} \u2014 [vault-api] deleted {relative_path} sha256={digest} bytes={size}"
+    line = f"{stamp} \u2014 [vault-api] {operation} {relative_path} sha256={digest} bytes={size}"
     try:
         MUTATOR.append("wiki/log.md", line)
         return True
     except Exception:
         return False
+
+
+def require_digest(data: dict, path, operation: str, label: str) -> tuple[bytes, str]:
+    """Demand the digest of the content the caller last read, and check it."""
+    expected = data.get("expected_sha256")
+    if expected is None:
+        raise ValueError(f"expected_sha256 is required for {operation}")
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise ValueError("expected_sha256 must be a SHA256 hex digest")
+    raw = path.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != expected:
+        raise MutationConflict(
+            f"sha256 mismatch for {label}: current {digest}"
+        )
+    return raw, digest
 
 
 
@@ -209,19 +225,9 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("delete refuses non-Markdown files")
                 if not path.is_file():
                     raise FileNotFoundError(target)
-                expected = data.get("expected_sha256")
-                if expected is None:
-                    raise ValueError("expected_sha256 is required for delete")
-                if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
-                    raise ValueError("expected_sha256 must be a SHA256 hex digest")
-                raw = path.read_bytes()
-                digest = hashlib.sha256(raw).hexdigest()
-                if digest != expected:
-                    raise MutationConflict(
-                        f"sha256 mismatch for {target}: current {digest}"
-                    )
+                raw, digest = require_digest(data, path, "delete", target)
                 path.unlink()
-                logged = audit_delete(target, digest, len(raw))
+                logged = audit_mutation("deleted", target, digest, len(raw))
                 self.json_reply(200, {
                     "ok": True,
                     "deleted": target,
@@ -232,11 +238,27 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/vault/move":
                 source = safe_path(str(data["from"]))
                 destination = safe_path(str(data["to"]))
+                source_rel = relative(source)
+                if not source_rel.startswith(DELETE_ROOT):
+                    raise ValueError("move is limited to paths beneath wiki/")
+                if not source.is_file():
+                    raise FileNotFoundError(source_rel)
+                raw, digest = require_digest(data, source, "move", source_rel)
                 if destination.exists():
                     raise FileExistsError("destination already exists")
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 source.rename(destination)
-                self.reply(200, "ok\n")
+                logged = audit_mutation(
+                    "moved", f"{source_rel} -> {relative(destination)}", digest, len(raw)
+                )
+                self.json_reply(200, {
+                    "ok": True,
+                    "from": source_rel,
+                    "to": relative(destination),
+                    "sha256": digest,
+                    "bytes": len(raw),
+                    "logged": logged,
+                })
             else:
                 self.error(404, "not found")
         except MutationConflict as exc:

@@ -293,7 +293,14 @@ class VaultMutator:
                 match = _FIELD_RE.match(line)
                 if not match:
                     raise MetadataError("malformed YAML frontmatter")
-                values[match.group("key")] = match.group("rest").strip()
+                rest = match.group("rest").strip()
+                if rest[:1] in ("[", "{") or "{" in rest:
+                    # Flow-style collections need a real parser; guessing here
+                    # would either reject valid lists or accept broken YAML.
+                    raise MetadataError(
+                        "PyYAML is required to validate flow-style frontmatter"
+                    )
+                values[match.group("key")] = rest
             return values
         try:
             parsed = yaml.safe_load(block) if block.strip() else {}
