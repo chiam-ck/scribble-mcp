@@ -33,6 +33,10 @@ class MetadataError(ValueError):
     """The requested mutation would violate the vault metadata contract."""
 
 
+class MutationConflict(ValueError):
+    """The locked current content differs from a caller's expected hash."""
+
+
 @dataclass(frozen=True)
 class MutationResult:
     path: str
@@ -90,10 +94,11 @@ class VaultMutator:
         self.read_bytes = read_bytes
         self._thread_locks: dict[str, threading.Lock] = {}
 
-    def append(self, relative_path: str, content: str) -> MutationResult:
+    def append(self, relative_path: str, content: str, *, expected_sha256: str | None = None) -> MutationResult:
         path = self._path(relative_path)
         with self._locked(path):
             existing = self.read_bytes(path) if path.exists() else b""
+            self._check_expected(existing, expected_sha256)
             exempt = self._is_exempt(relative_path)
             old_text = self._decode(existing, path) if existing and not exempt else ""
             if not path.exists():
@@ -124,11 +129,12 @@ class VaultMutator:
             self._commit(path, new_bytes)
         return MutationResult(self._relative(relative_path), "append", metadata_updated, updated)
 
-    def write(self, relative_path: str, content: str) -> MutationResult:
+    def write(self, relative_path: str, content: str, *, expected_sha256: str | None = None) -> MutationResult:
         path = self._path(relative_path)
         with self._locked(path):
             exists = path.exists()
             existing = self.read_bytes(path) if exists else b""
+            self._check_expected(existing, expected_sha256)
             exempt = self._is_exempt(relative_path)
             old_text = self._decode(existing, path) if existing and not exempt else ""
 
@@ -180,6 +186,15 @@ class VaultMutator:
             new_text = self._replace_field(new_text, new_frontmatter, "updated", today)
             self._commit(path, new_text.encode("utf-8"))
             return MutationResult(self._relative(relative_path), "write", old_updated != today, today)
+
+    @staticmethod
+    def _check_expected(existing: bytes, expected_sha256: str | None) -> None:
+        if expected_sha256 is None:
+            return
+        if not isinstance(expected_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+            raise ValueError("expected_sha256 must be a SHA256 hex digest")
+        if hashlib.sha256(existing).hexdigest() != expected_sha256:
+            raise MutationConflict("current content changed; fresh read required")
 
     def _path(self, relative_path: str) -> Path:
         relative = relative_path.replace("\\", "/")

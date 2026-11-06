@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from vault_mutations import MutationResult, MetadataError, VaultMutator
+from vault_mutations import MutationResult, MetadataError, MutationConflict, VaultMutator
 from vault_reads import read_vault_bytes, read_vault_text
 
 VAULT = Path(
@@ -167,11 +167,11 @@ class Handler(BaseHTTPRequestHandler):
             data = json_body(self)
             if parsed.path == "/vault/write":
                 path = safe_path(str(data["path"]))
-                result = MUTATOR.write(relative(path), str(data["content"]))
+                result = MUTATOR.write(relative(path), str(data["content"]), expected_sha256=data.get("expected_sha256"))
                 self.json_reply(200, mutation_payload(result))
             elif parsed.path == "/vault/append":
                 path = safe_path(str(data["path"]))
-                result = MUTATOR.append(relative(path), str(data["content"]))
+                result = MUTATOR.append(relative(path), str(data["content"]), expected_sha256=data.get("expected_sha256"))
                 self.json_reply(200, mutation_payload(result))
             elif parsed.path == "/vault/delete":
                 path = safe_path(str(data["path"]))
@@ -187,6 +187,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200, "ok\n")
             else:
                 self.error(404, "not found")
+        except MutationConflict as exc:
+            self.error(409, str(exc))
         except (KeyError, ValueError, json.JSONDecodeError, MetadataError) as exc:
             self.error(400, str(exc))
         except (FileNotFoundError, NotADirectoryError) as exc:
