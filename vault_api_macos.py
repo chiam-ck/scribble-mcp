@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import datetime
-import hashlib
 import json
 import os
 import re
@@ -43,7 +42,7 @@ DELETE_PROTECTED = {
 def audit_mutation(operation: str, relative_path: str, digest: str, size: int) -> bool:
     """Best-effort audit line; a failed log append never undoes the mutation."""
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    line = f"{stamp} \u2014 [vault-api] {operation} {relative_path} sha256={digest} bytes={size}"
+    line = f"\n{stamp} \u2014 [vault-api] {operation} {relative_path} sha256={digest} bytes={size}\n"
     try:
         MUTATOR.append("wiki/log.md", line)
         return True
@@ -53,18 +52,7 @@ def audit_mutation(operation: str, relative_path: str, digest: str, size: int) -
 
 def require_digest(data: dict, path, operation: str, label: str) -> tuple[bytes, str]:
     """Demand the digest of the content the caller last read, and check it."""
-    expected = data.get("expected_sha256")
-    if expected is None:
-        raise ValueError(f"expected_sha256 is required for {operation}")
-    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
-        raise ValueError("expected_sha256 must be a SHA256 hex digest")
-    raw = path.read_bytes()
-    digest = hashlib.sha256(raw).hexdigest()
-    if digest != expected:
-        raise MutationConflict(
-            f"sha256 mismatch for {label}: current {digest}"
-        )
-    return raw, digest
+    return MUTATOR.require_digest(path, data.get("expected_sha256"), operation)
 
 
 
@@ -225,8 +213,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("delete refuses non-Markdown files")
                 if not path.is_file():
                     raise FileNotFoundError(target)
-                raw, digest = require_digest(data, path, "delete", target)
-                path.unlink()
+                raw, digest = MUTATOR.delete(target, expected_sha256=data.get("expected_sha256"))
                 logged = audit_mutation("deleted", target, digest, len(raw))
                 self.json_reply(200, {
                     "ok": True,
@@ -243,11 +230,9 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("move is limited to paths beneath wiki/")
                 if not source.is_file():
                     raise FileNotFoundError(source_rel)
-                raw, digest = require_digest(data, source, "move", source_rel)
-                if destination.exists():
-                    raise FileExistsError("destination already exists")
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                source.rename(destination)
+                raw, digest = MUTATOR.move(
+                    source_rel, relative(destination), expected_sha256=data.get("expected_sha256")
+                )
                 logged = audit_mutation(
                     "moved", f"{source_rel} -> {relative(destination)}", digest, len(raw)
                 )

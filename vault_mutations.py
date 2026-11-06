@@ -6,13 +6,15 @@ comments, list formatting, and unrelated whitespace remain untouched.
 """
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import os
 import re
 import stat
+import sys
 import tempfile
 import threading
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -186,6 +188,68 @@ class VaultMutator:
             new_text = self._replace_field(new_text, new_frontmatter, "updated", today)
             self._commit(path, new_text.encode("utf-8"))
             return MutationResult(self._relative(relative_path), "write", old_updated != today, today)
+
+    def delete(self, relative_path: str, *, expected_sha256: str | None) -> tuple[bytes, str]:
+        path = self._path(relative_path)
+        with self._locked(path):
+            raw, digest = self.require_digest(path, expected_sha256, "delete")
+            path.unlink()
+            return raw, digest
+
+    def move(self, source_path: str, destination_path: str, *, expected_sha256: str | None) -> tuple[bytes, str]:
+        source = self._path(source_path)
+        destination = self._path(destination_path)
+        # Globally ordered acquisition prevents opposite-direction moves from
+        # deadlocking and shares both locks with write, append, and delete.
+        with ExitStack() as stack:
+            for path in sorted({source, destination}, key=str):
+                stack.enter_context(self._locked(path))
+            raw, digest = self.require_digest(source, expected_sha256, "move")
+            if destination.exists() or destination.is_symlink():
+                raise FileExistsError("destination already exists")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            self._move_no_replace(source, destination)
+            return raw, digest
+
+    def require_digest(self, path: Path, expected_sha256: str | None, operation: str) -> tuple[bytes, str]:
+        """Call under the path lock when authorizing a destructive mutation."""
+        if expected_sha256 is None:
+            raise ValueError(f"expected_sha256 is required for {operation}")
+        if not isinstance(expected_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+            raise ValueError("expected_sha256 must be a SHA256 hex digest")
+        if path.is_dir():
+            raise ValueError(f"{operation} refuses directories")
+        raw = self.read_bytes(path)
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != expected_sha256:
+            raise MutationConflict(f"sha256 mismatch: current {digest}; fresh read required")
+        return raw, digest
+
+    @staticmethod
+    def _move_no_replace(source: Path, destination: Path) -> None:
+        """Use native exclusive rename; never fall back to clobbering rename.
+
+        Unsupported filesystems fail closed. Other POSIX platforms can use
+        exclusive hard-link creation followed by unlink for regular files.
+        """
+        libc = ctypes.CDLL(None, use_errno=True)
+        if sys.platform == "darwin" and hasattr(libc, "renamex_np"):
+            rename = libc.renamex_np
+            rename.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+            rename.restype = ctypes.c_int
+            result = rename(os.fsencode(source), os.fsencode(destination), 4)  # RENAME_EXCL
+        elif sys.platform.startswith("linux") and hasattr(libc, "renameat2"):
+            rename = libc.renameat2
+            rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+            rename.restype = ctypes.c_int
+            result = rename(-100, os.fsencode(source), -100, os.fsencode(destination), 1)  # RENAME_NOREPLACE
+        else:
+            os.link(source, destination)
+            source.unlink()
+            return
+        if result != 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error), str(destination))
 
     @staticmethod
     def _check_expected(existing: bytes, expected_sha256: str | None) -> None:

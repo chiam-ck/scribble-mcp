@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -52,7 +53,7 @@ def read(path: str, *, missing_ok: bool = False) -> str | None:
         raise
     if status != 200:
         raise RuntimeError(f"Vault read failed for {path}: HTTP {status}")
-    return body.decode("utf-8", "replace")
+    return body.decode("utf-8")
 
 
 def write(path: str, content: str) -> dict[str, object]:
@@ -100,7 +101,7 @@ def delete(path: str, sha256: str | None = None) -> dict[str, object]:
     current = read(path, missing_ok=True)
     if current is None:
         raise RuntimeError(f"cannot delete missing note: {path}")
-    digest = sha256 or hashlib.sha256(current.encode("utf-8")).hexdigest()
+    digest = expected_digest(current, sha256)
     try:
         status, body = request("/vault/delete", method="POST",
                                payload={"path": path, "expected_sha256": digest})
@@ -112,25 +113,53 @@ def delete(path: str, sha256: str | None = None) -> dict[str, object]:
             ) from exc
         raise RuntimeError(f"Vault delete failed for {path}: HTTP {exc.code} {detail}") from exc
     result = json.loads(body.decode("utf-8", "replace"))
+    if status != 200 or not result.get("ok") or result.get("sha256") != digest:
+        raise RuntimeError(f"unexpected delete receipt for {path}; inspect the note before retrying")
     if read(path, missing_ok=True) is not None:
         raise RuntimeError(f"read-back shows {path} still present")
     result["read_back_verified"] = True
     return result
 
 
-def move(source: str, destination: str) -> dict[str, object]:
+def expected_digest(content: str, supplied: str | None) -> str:
+    """Preserve an explicit precondition; never replace a stale or invalid one."""
+    if supplied is None:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+    if not isinstance(supplied, str) or not re.fullmatch(r"[0-9a-f]{64}", supplied):
+        raise ValueError("sha256 must be a lowercase SHA256 hex digest")
+    return supplied
+
+
+def move(source: str, destination: str, sha256: str | None = None) -> dict[str, object]:
     source, destination = valid_path(source), valid_path(destination)
-    if read(source, missing_ok=True) is None:
+    current = read(source, missing_ok=True)
+    if current is None:
         raise RuntimeError(f"cannot move missing note: {source}")
+    digest = expected_digest(current, sha256)
     if read(destination, missing_ok=True) is not None:
         raise RuntimeError(f"destination already exists: {destination}")
-    status, body = request("/vault/move", method="POST",
-                           payload={"from": source, "to": destination})
+    try:
+        status, body = request("/vault/move", method="POST",
+                               payload={"from": source, "to": destination,
+                                        "expected_sha256": digest})
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace").strip()
+        raise RuntimeError(
+            f"Vault move refused: HTTP {exc.code} {detail}. Inspect both paths before retrying."
+        ) from exc
     if status != 200:
         raise RuntimeError(f"Vault move failed: HTTP {status} {body[:200]!r}")
-    if read(source, missing_ok=True) is not None or read(destination, missing_ok=True) is None:
+    result = json.loads(body.decode("utf-8"))
+    if (not result.get("ok") or result.get("from") != source
+            or result.get("to") != destination or result.get("sha256") != digest):
+        raise RuntimeError("unexpected move receipt; inspect both paths before retrying")
+    remaining_source = read(source, missing_ok=True)
+    moved_content = read(destination, missing_ok=True)
+    if (remaining_source is not None or moved_content is None
+            or hashlib.sha256(moved_content.encode("utf-8")).hexdigest() != digest):
         raise RuntimeError(f"read-back mismatch after moving {source} -> {destination}")
-    return {"ok": True, "from": source, "to": destination, "read_back_verified": True}
+    result["read_back_verified"] = True
+    return result
 
 
 def run_action(action: dict) -> dict[str, object] | str:
@@ -146,7 +175,7 @@ def run_action(action: dict) -> dict[str, object] | str:
     if op == "delete":
         return delete(action["path"], action.get("sha256"))
     if op == "move":
-        return move(action["path"], action["to"])
+        return move(action["path"], action["to"], action.get("sha256"))
     raise ValueError("batch actions support only read, write, append, delete, move")
 
 
@@ -173,6 +202,8 @@ def main() -> int:
     move_parser = sub.add_parser("move")
     move_parser.add_argument("path")
     move_parser.add_argument("to")
+    move_parser.add_argument("--sha256", default=None,
+                             help="digest of the content you last read; taken from a fresh read when omitted")
     batch_parser = sub.add_parser("batch")
     batch_parser.add_argument("manifest", type=Path, help="JSON array of ordered {op,path,content_file} actions")
     args = parser.parse_args()
@@ -196,7 +227,7 @@ def main() -> int:
         elif args.command == "delete":
             print(json.dumps(delete(args.path, args.sha256), ensure_ascii=False))
         elif args.command == "move":
-            print(json.dumps(move(args.path, args.to), ensure_ascii=False))
+            print(json.dumps(move(args.path, args.to, args.sha256), ensure_ascii=False))
         elif args.command == "append":
             content = args.content_file.read_text(encoding="utf-8")
             print(json.dumps(append(args.path, content), ensure_ascii=False))

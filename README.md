@@ -133,17 +133,24 @@ All paths are relative to the vault root. Path traversal and absolute paths are 
 | GET | `/vault/read?path=wiki/SCHEMA.md` | none | Read a file |
 | GET | `/vault/list?path=wiki/` | none | List a directory |
 | GET | `/vault/search?q=frontmatter&path=wiki/` | none | Case-sensitive regex search |
-| POST | `/vault/write` | `{path, content}` | Write or overwrite a file |
-| POST | `/vault/append` | `{path, content}` | Append to a file |
-| POST | `/vault/delete` | `{path}` | Delete a file |
-| POST | `/vault/move` | `{from, to}` | Move or rename a file |
+| POST | `/vault/write` | `{path, content, expected_sha256?}` | Write or overwrite a file |
+| POST | `/vault/append` | `{path, content, expected_sha256?}` | Append to a file |
+| POST | `/vault/delete` | `{path, expected_sha256}` | Delete a file |
+| POST | `/vault/move` | `{from, to, expected_sha256}` | Move or rename a file |
 
 The n8n MCP workflow parameter names are part of the contract:
 
 - Search uses `q`
-- Move uses `from` and `to`
+- Move uses `from`, `to`, and `expected_sha256`
 - Write and append use `path` and `content`
-- Delete uses `path`
+- Delete uses `path` and `expected_sha256`
+
+The macOS API requires a lowercase 64-character SHA256 digest for delete/move of the exact
+source bytes previously read. Missing or malformed digests return 400; stale
+digests or an existing move destination return 409. An adapter such as n8n
+must forward the caller's digest unchanged, never reread and replace it.
+Write/append accept an optional digest; omitted or null preserves legacy
+unguarded behavior and **does not** mean create-only.
 
 ## Write safety
 
@@ -155,6 +162,9 @@ The n8n MCP workflow parameter names are part of the contract:
 - `wiki/log.md`, `wiki/index.md`, `wiki/SCHEMA.md`, `wiki/raw/**`, non-Markdown files, and Markdown without frontmatter are metadata-exempt.
 - macOS mutations use a same-directory temporary file, `fsync`, and atomic replacement; a failed commit leaves the previous file intact.
 - Linux mutations use the same metadata and per-file locking layer, but commit in place because rename-based replacement is not reliable on the iCloud FUSE mount.
+- On macOS, delete and move check the digest while holding the same per-path locks as write/append. Moves lock both paths in a stable order and use native no-replace rename, so an existing destination is never overwritten. A filesystem that cannot provide exclusive rename fails closed.
+- These locks coordinate API processes using the same lock directory. Independent editors and iCloud do not take those locks, so this is not a transaction with external writers.
+- Existing macOS restrictions are unchanged: delete is limited to Markdown under `wiki/` and protects the index, schema and audit logs; move requires its source under `wiki/`. Successful macOS delete/move replies include the paths, digest, byte count and `logged` status. Audit appends are best-effort, separated lines under the log's normal lock. The historical Linux HTTP entry point remains unchanged and does not enforce these digest guards.
 - Successful write/append responses are JSON with `ok`, `path`, `operation`, and `metadata_updated` fields; enforced note mutations also include `updated`.
 
 ## n8n verification
@@ -177,5 +187,20 @@ list and search. Never leave test files in the vault.
 
 `vault_api_client.py` is the auditable HTTP client for the API (`health`, `read`,
 `list`, `search`, `write`, `append`, `delete`, `move`, `batch`). Every mutation is
-read back before it reports success, and `delete` and `move` both send the digest of the content
-they just read, so a note edited in between is refused rather than clobbered.
+read back before it reports success. `delete` and `move` accept `--sha256` and
+forward that exact precondition; when omitted they calculate it from a fresh
+read. Move also verifies the destination content's digest, not just existence.
+The client targets the macOS JSON-receipt API.
+
+```bash
+python3 vault_api_client.py move wiki/old.md wiki/new.md --sha256 "$SOURCE_SHA256"
+python3 vault_api_client.py delete wiki/old.md --sha256 "$SOURCE_SHA256"
+```
+
+Batch delete/move actions accept an optional `sha256` field. A stale or invalid
+supplied digest is never silently replaced, and a refused or uncertain mutation
+is not automatically retried. Inspect the source and destination before retrying.
+
+The legacy client write/append commands do not yet send a precondition. For a
+guarded edit, call the API with the exact pre-change digest, and verify the full
+readback allowing for the documented metadata normalization.
