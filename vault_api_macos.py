@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import datetime
+import hashlib
 import json
 import os
 import re
@@ -27,6 +29,27 @@ MOUNT = Path(
 SERVICE = os.environ.get("VAULT_SYNC_SERVICE", "icloud.service")
 MAX_BODY = 20 * 1024 * 1024
 MUTATOR = VaultMutator(VAULT, read_bytes=read_vault_bytes)
+# Deletion is opt-in and narrow: only notes beneath wiki/, and never the files
+# that hold the vault's own structure.
+DELETE_ROOT = "wiki/"
+DELETE_PROTECTED = {
+    "wiki/index.md",
+    "wiki/SCHEMA.md",
+    "wiki/log.md",
+    "wiki/log-2026-04_09.md",
+}
+
+
+def audit_delete(relative_path: str, digest: str, size: int) -> bool:
+    """Best-effort audit line; a failed log append never resurrects the file."""
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    line = f"{stamp} \u2014 [vault-api] deleted {relative_path} sha256={digest} bytes={size}"
+    try:
+        MUTATOR.append("wiki/log.md", line)
+        return True
+    except Exception:
+        return False
+
 
 
 def service_ready() -> tuple[bool, str]:
@@ -175,8 +198,37 @@ class Handler(BaseHTTPRequestHandler):
                 self.json_reply(200, mutation_payload(result))
             elif parsed.path == "/vault/delete":
                 path = safe_path(str(data["path"]))
+                target = relative(path)
+                if not target.startswith(DELETE_ROOT):
+                    raise ValueError("delete is limited to paths beneath wiki/")
+                if target in DELETE_PROTECTED:
+                    raise ValueError(f"protected path: {target}")
+                if path.is_dir():
+                    raise ValueError("delete refuses directories")
+                if path.suffix != ".md":
+                    raise ValueError("delete refuses non-Markdown files")
+                if not path.is_file():
+                    raise FileNotFoundError(target)
+                expected = data.get("expected_sha256")
+                if expected is None:
+                    raise ValueError("expected_sha256 is required for delete")
+                if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                    raise ValueError("expected_sha256 must be a SHA256 hex digest")
+                raw = path.read_bytes()
+                digest = hashlib.sha256(raw).hexdigest()
+                if digest != expected:
+                    raise MutationConflict(
+                        f"sha256 mismatch for {target}: current {digest}"
+                    )
                 path.unlink()
-                self.reply(200, "ok\n")
+                logged = audit_delete(target, digest, len(raw))
+                self.json_reply(200, {
+                    "ok": True,
+                    "deleted": target,
+                    "sha256": digest,
+                    "bytes": len(raw),
+                    "logged": logged,
+                })
             elif parsed.path == "/vault/move":
                 source = safe_path(str(data["from"]))
                 destination = safe_path(str(data["to"]))
