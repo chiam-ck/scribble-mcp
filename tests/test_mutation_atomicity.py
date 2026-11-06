@@ -133,7 +133,7 @@ class AtomicityTests(unittest.TestCase):
     def test_digest_uses_configured_coordinated_reader(self):
         with patch.object(self.mutator, "read_bytes", return_value=b"hydrated") as read:
             raw, sha = self.mutator.delete("wiki/note.md", expected_sha256=digest(b"hydrated"))
-        read.assert_called_once_with(self.note)
+        read.assert_called_once_with(self.note.resolve())
         self.assertEqual((raw, sha), (b"hydrated", digest(b"hydrated")))
 
     def test_concurrent_audit_lines_are_complete_and_separated(self):
